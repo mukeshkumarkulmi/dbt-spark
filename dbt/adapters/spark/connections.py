@@ -7,6 +7,7 @@ from dbt.contracts.connection import ConnectionState, AdapterResponse
 from dbt.events import AdapterLogger
 from dbt.utils import DECIMALS
 from dbt.adapters.spark import __version__
+from dbt.adapters.spark.livysession import LivyConnection, LivySessionConnectionWrapper, LivyConnectionManager
 
 try:
     from TCLIService.ttypes import TOperationState as ThriftState
@@ -25,7 +26,7 @@ import sqlparams
 
 from hologram.helpers import StrEnum
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 try:
     from thrift.transport.TSSLSocket import TSSLSocket
@@ -53,6 +54,7 @@ class SparkConnectionMethod(StrEnum):
     HTTP = "http"
     ODBC = "odbc"
     SESSION = "session"
+    LIVY = "livy"
 
 
 @dataclass
@@ -75,6 +77,9 @@ class SparkCredentials(Credentials):
     use_ssl: bool = False
     server_side_parameters: Dict[str, Any] = field(default_factory=dict)
     retry_all: bool = False
+    password: Optional[str] = None
+    livy_session_parameters: Dict[str, Any] = field(default_factory=dict)
+    verify_ssl_certificate: Optional[bool] = True
 
     @classmethod
     def __pre_deserialize__(cls, data):
@@ -148,7 +153,10 @@ class SparkCredentials(Credentials):
         return self.host
 
     def _connection_keys(self):
-        return ("host", "port", "cluster", "endpoint", "schema", "organization")
+        if self.method == SparkConnectionMethod.LIVY:
+            return "host", "auth", "schema"
+        else:
+            return ("host", "port", "cluster", "endpoint", "schema", "organization")
 
 
 class PyhiveConnectionWrapper(object):
@@ -279,6 +287,7 @@ class SparkConnectionManager(SQLConnectionManager):
     SPARK_CLUSTER_HTTP_PATH = "/sql/protocolv1/o/{organization}/{cluster}"
     SPARK_SQL_ENDPOINT_HTTP_PATH = "/sql/1.0/endpoints/{endpoint}"
     SPARK_CONNECTION_URL = "{host}:{port}" + SPARK_CLUSTER_HTTP_PATH
+    connection_managers = {}
 
     @contextmanager
     def exception_handler(self, sql):
@@ -450,6 +459,52 @@ class SparkConnectionManager(SQLConnectionManager):
                     )
 
                     handle = SessionConnectionWrapper(Connection())
+                elif creds.method == SparkConnectionMethod.LIVY:
+                    # connect to livy interactive session
+                    connection_start_time = time.time()
+                    connection_ex = None
+                    try:
+                        thread_id = cls.get_thread_identifier() 
+
+                        if not thread_id in SparkConnectionManager.connection_managers:
+                             SparkConnectionManager.connection_managers[thread_id] = LivyConnectionManager()
+
+                        handle = LivySessionConnectionWrapper(
+                             SparkConnectionManager.connection_managers[thread_id].connect(
+                                                             creds.host,
+                                                             creds.user,
+                                                             creds.password,
+                                                             creds.auth,
+                                                             creds.livy_session_parameters,
+                                                             creds.verify_ssl_certificate
+                                                         )
+                        )
+
+                        connection_end_time = time.time()
+                        connection.state = ConnectionState.OPEN
+
+                    except Exception as ex:
+                        logger.debug("Connection error: {}".format(ex))
+                        connection_ex = ex
+                        connection_end_time = time.time()
+                        connection.state = ConnectionState.FAIL
+
+                    # track usage
+                    payload = {
+                        "event_type": "open",
+                        "auth": "livy",
+                        "connection_state": connection.state,
+                        "elapsed_time": "{:.2f}".format(
+                            connection_end_time - connection_start_time
+                        ),
+                    }
+
+                    if connection.state == ConnectionState.FAIL:
+                        payload["connection_exception"] = "{}".format(connection_ex)
+                        raise connection_ex
+
+                    if connection_ex:
+                        raise connection_ex
                 else:
                     raise dbt.exceptions.DbtProfileError(
                         f"invalid credential method: {creds.method}"
@@ -491,6 +546,42 @@ class SparkConnectionManager(SQLConnectionManager):
         connection.handle = handle
         connection.state = ConnectionState.OPEN
         return connection
+    @classmethod
+    def close(cls, connection):
+        try:
+            # if the connection is in closed or init, there's nothing to do
+            if connection.state in {ConnectionState.CLOSED, ConnectionState.INIT}:
+                return connection
+
+            connection_close_start_time = time.time()
+            connection = super().close(connection)
+            connection_close_end_time = time.time()
+
+            payload = {
+                "event_type": "close",
+                "connection_state": ConnectionState.CLOSED,
+                "elapsed_time": "{:.2f}".format(
+                    connection_close_end_time - connection_close_start_time
+                ),
+            }
+
+            return connection
+        except Exception as err:
+            logger.debug(f"Error closing connection {err}")
+
+
+    @classmethod
+    def data_type_code_to_name(cls, type_code: Union[type, str]) -> str:  # type: ignore
+        """
+        :param Union[type, str] type_code: The sql to execute.
+            * type_code is a python type (!) in pyodbc https://github.com/mkleehammer/pyodbc/wiki/Cursor#description, and a string for other spark runtimes.
+            * ignoring the type annotation on the signature for this adapter instead of updating the base class because this feels like a really special case.
+        :return: stringified the cursor type_code
+        :rtype: str
+        """
+        if isinstance(type_code, str):
+            return type_code
+        return type_code.__name__.upper()
 
 
 def build_ssl_transport(host, port, username, auth, kerberos_service_name, password=None):

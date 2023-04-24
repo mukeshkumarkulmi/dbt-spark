@@ -156,6 +156,7 @@
       {{ options_clause() }}
       {{ partition_cols(label="partitioned by") }}
       {{ clustered_cols(label="clustered by") }}
+      {{ dbt_spark_tblproperties_clause() }}
       {{ location_clause() }}
       {{ comment_clause() }}
       as
