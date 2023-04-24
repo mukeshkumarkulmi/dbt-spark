@@ -464,7 +464,7 @@ class SparkConnectionManager(SQLConnectionManager):
                     connection_start_time = time.time()
                     connection_ex = None
                     try:
-                        thread_id = cls.get_thread_identifier() 
+                        thread_id = cls.get_thread_identifier()
 
                         if not thread_id in SparkConnectionManager.connection_managers:
                              SparkConnectionManager.connection_managers[thread_id] = LivyConnectionManager()
@@ -489,18 +489,7 @@ class SparkConnectionManager(SQLConnectionManager):
                         connection_end_time = time.time()
                         connection.state = ConnectionState.FAIL
 
-                    # track usage
-                    payload = {
-                        "event_type": "open",
-                        "auth": "livy",
-                        "connection_state": connection.state,
-                        "elapsed_time": "{:.2f}".format(
-                            connection_end_time - connection_start_time
-                        ),
-                    }
-
                     if connection.state == ConnectionState.FAIL:
-                        payload["connection_exception"] = "{}".format(connection_ex)
                         raise connection_ex
 
                     if connection_ex:
@@ -556,14 +545,6 @@ class SparkConnectionManager(SQLConnectionManager):
             connection_close_start_time = time.time()
             connection = super().close(connection)
             connection_close_end_time = time.time()
-
-            payload = {
-                "event_type": "close",
-                "connection_state": ConnectionState.CLOSED,
-                "elapsed_time": "{:.2f}".format(
-                    connection_close_end_time - connection_close_start_time
-                ),
-            }
 
             return connection
         except Exception as err:
