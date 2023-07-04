@@ -465,6 +465,9 @@ class SparkConnectionManager(SQLConnectionManager):
                     connection_ex = None
                     try:
                         thread_id = cls.get_thread_identifier()
+                        if len(SparkConnectionManager.connection_managers) > 0:
+                            livyConnMgr = list(SparkConnectionManager.connection_managers.values())[0]
+                            SparkConnectionManager.connection_managers[thread_id] = livyConnMgr
 
                         if not thread_id in SparkConnectionManager.connection_managers:
                              SparkConnectionManager.connection_managers[thread_id] = LivyConnectionManager()
