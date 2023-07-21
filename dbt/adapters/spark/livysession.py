@@ -18,7 +18,7 @@ from __future__ import annotations
 from cmath import log
 
 import json
-import time 
+import time
 import requests
 from urllib import response
 
@@ -35,7 +35,7 @@ from requests_kerberos import HTTPKerberosAuth
 logger = AdapterLogger("Spark")
 NUMBERS = DECIMALS + (int, float)
 
-DEFAULT_POLL_WAIT = 2
+DEFAULT_POLL_WAIT = 10
 
 class LivySession:
     def __init__(self, connect_url, auth, headers, verify_ssl_certificate):
@@ -132,7 +132,10 @@ class LivySession:
                 verify=self.verify_ssl_certificate
             ).json()
 
-        return res['state'] == 'idle'
+        if res['state'] in ['not_started', 'starting']:
+            time.sleep(2 * DEFAULT_POLL_WAIT)
+
+        return (res['state'] in ['not_started', 'starting', 'idle', 'busy'])
 
 
 # cursor object - wrapped for livy API
@@ -215,15 +218,15 @@ class LivyCursor:
         https://github.com/mkleehammer/pyodbc/wiki/Cursor#close
         """
         self._rows = None
-        
+
     def _submitLivyCode(self, code):
         # Submit code
         data = {'code': code}
 
-        res = requests.post(self.connect_url + '/sessions/' + self.session_id + '/statements', 
-              data=json.dumps(data), 
-              headers=self.headers, 
-              auth=self.auth, 
+        res = requests.post(self.connect_url + '/sessions/' + self.session_id + '/statements',
+              data=json.dumps(data),
+              headers=self.headers,
+              auth=self.auth,
               verify=self.verify_ssl_certificate
         )
 
@@ -233,8 +236,8 @@ class LivyCursor:
     def _getLivySQL(self, sql):
         # Comment, what is going on?!
         # The following code is actually injecting SQL to pyspark object for executing it via the Livy session - over an HTTP post request.
-        # Basically, it is like code inside a code. As a result the strings passed here in 'escapedSQL' variable are unescapted and interpreted on the server side. 
-        # This may have repurcursions of code injection not only as SQL, but also arbritary Python code. An alternate way safer way to acheive this is still unknown. 
+        # Basically, it is like code inside a code. As a result the strings passed here in 'escapedSQL' variable are unescapted and interpreted on the server side.
+        # This may have repurcursions of code injection not only as SQL, but also arbritary Python code. An alternate way safer way to acheive this is still unknown.
         # escapedSQL = sql.replace("\n", "\\n").replace('"', '\\\"')
         # code = "val sprk_sql = spark.sql(\"" + escapedSQL + "\")\nval sprk_res=sprk_sql.collect\n%json sprk_res"  # .format(escapedSQL)
 
@@ -250,8 +253,8 @@ class LivyCursor:
 
         while True:
             res = requests.get(
-                  self.connect_url + '/sessions/' + self.session_id + '/statements/' + repr(json_res['id']), 
-                  headers=self.headers, 
+                  self.connect_url + '/sessions/' + self.session_id + '/statements/' + repr(json_res['id']),
+                  headers=self.headers,
                   auth=self.auth,
                   verify=self.verify_ssl_certificate
             ).json()
@@ -284,11 +287,11 @@ class LivyCursor:
         """
         if len(parameters) > 0:
             sql = sql % parameters
-        
+
         # TODO: handle parameterised sql
 
         res = self._getLivyResult(self._submitLivyCode(self._getLivySQL(sql)))
-        
+
         if (res['output']['status'] == 'ok'):
             # values = res['output']['data']['application/json']
             values = res['output']['data']['application/json']
@@ -306,7 +309,7 @@ class LivyCursor:
 
             raise dbt.exceptions.raise_database_error(
                         'Error while executing query: ' + res['output']['evalue']
-                    ) 
+                    )
 
     def fetchall(self):
         """
@@ -336,7 +339,7 @@ class LivyCursor:
         ------
         https://github.com/mkleehammer/pyodbc/wiki/Cursor#fetchone
         """
-       
+
         if self._rows is not None and len(self._rows) > 0:
             row = self._rows.pop(0)
         else:
@@ -433,7 +436,6 @@ class LivyConnectionManager:
             self.livy_global_session = LivySession(connect_url, auth, headers, verify_ssl_certificate)
             self.livy_global_session.create_session(data)
         elif not self.livy_global_session.is_valid_session():
-            self.livy_global_session.delete_session()
             self.livy_global_session.create_session(data)
         else:
             logger.debug(f"Reusing session: {self.livy_global_session.session_id}")
@@ -498,4 +500,3 @@ class LivySessionConnectionWrapper(object):
             return "''"
         else:
             return f"'{value}'"
-

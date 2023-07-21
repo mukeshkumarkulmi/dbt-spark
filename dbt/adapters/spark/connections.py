@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 
 import dbt.exceptions
+from threading import Lock
 from dbt.adapters.base import Credentials
 from dbt.adapters.sql import SQLConnectionManager
 from dbt.contracts.connection import ConnectionState, AdapterResponse
@@ -41,7 +42,7 @@ import base64
 import time
 
 logger = AdapterLogger("Spark")
-
+lock = Lock()
 NUMBERS = DECIMALS + (int, float)
 
 
@@ -463,14 +464,16 @@ class SparkConnectionManager(SQLConnectionManager):
                     # connect to livy interactive session
                     connection_start_time = time.time()
                     connection_ex = None
+                    lock.acquire()
                     try:
                         thread_id = cls.get_thread_identifier()
-                        if len(SparkConnectionManager.connection_managers) > 0:
-                            livyConnMgr = list(SparkConnectionManager.connection_managers.values())[0]
-                            SparkConnectionManager.connection_managers[thread_id] = livyConnMgr
 
                         if not thread_id in SparkConnectionManager.connection_managers:
-                             SparkConnectionManager.connection_managers[thread_id] = LivyConnectionManager()
+                            if len(SparkConnectionManager.connection_managers) > 0:
+                                livyConnMgr = list(SparkConnectionManager.connection_managers.values())[0]
+                                SparkConnectionManager.connection_managers[thread_id] = livyConnMgr
+                            else:
+                                SparkConnectionManager.connection_managers[thread_id] = LivyConnectionManager()
 
                         handle = LivySessionConnectionWrapper(
                              SparkConnectionManager.connection_managers[thread_id].connect(
@@ -482,7 +485,7 @@ class SparkConnectionManager(SQLConnectionManager):
                                                              creds.verify_ssl_certificate
                                                          )
                         )
-
+                        lock.release()
                         connection_end_time = time.time()
                         connection.state = ConnectionState.OPEN
 
