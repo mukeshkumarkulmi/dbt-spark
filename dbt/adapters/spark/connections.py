@@ -485,7 +485,6 @@ class SparkConnectionManager(SQLConnectionManager):
                                                              creds.verify_ssl_certificate
                                                          )
                         )
-                        lock.release()
                         connection_end_time = time.time()
                         connection.state = ConnectionState.OPEN
 
@@ -495,6 +494,7 @@ class SparkConnectionManager(SQLConnectionManager):
                         connection_end_time = time.time()
                         connection.state = ConnectionState.FAIL
 
+                    lock.release()
                     if connection.state == ConnectionState.FAIL:
                         raise connection_ex
 
