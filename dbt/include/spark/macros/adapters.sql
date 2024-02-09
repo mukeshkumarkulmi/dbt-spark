@@ -149,8 +149,10 @@
       {% else %}
         create table {{ relation }}
       {% endif %}
-      {% if config.get('contract', False) %}
-        {{ get_assert_columns_equivalent(sql) }}
+      {%- set contract_config = config.get('contract') -%}
+      {%- if contract_config.enforced -%}
+        {{ get_assert_columns_equivalent(compiled_code) }}
+        {%- set compiled_code = get_select_subquery(compiled_code) %}
       {% endif %}
       {{ file_format_clause() }}
       {{ options_clause() }}
@@ -179,8 +181,9 @@
 {% endmacro %}
 
 {% macro spark__persist_constraints(relation, model) %}
-  {% if config.get('contract', False) and config.get('file_format', 'delta') == 'delta' %}
-    {% do alter_table_add_constraints(relation, model.columns) %}
+  {%- set contract_config = config.get('contract') -%}
+  {% if contract_config.enforced and config.get('file_format', 'delta') == 'delta' %}
+    {% do alter_table_add_constraints(relation, model.constraints) %}
     {% do alter_column_set_constraints(relation, model.columns) %}
   {% endif %}
 {% endmacro %}
@@ -189,14 +192,12 @@
   {{ return(adapter.dispatch('alter_table_add_constraints', 'dbt')(relation, constraints)) }}
 {% endmacro %}
 
-{% macro spark__alter_table_add_constraints(relation, column_dict) %}
-
-  {% for column_name in column_dict %}
-    {% set constraints_check = column_dict[column_name]['constraints_check'] %}
-    {% if constraints_check and not is_incremental() %}
-      {%- set constraint_hash = local_md5(column_name ~ ";" ~ constraint_check) -%}
+{% macro spark__alter_table_add_constraints(relation, constraints) %}
+  {% for constraint in constraints %}
+    {% if constraint.type == 'check' and not is_incremental() %}
+      {%- set constraint_hash = local_md5(column_name ~ ";" ~ constraint.expression ~ ";" ~ loop.index) -%}
       {% call statement() %}
-        alter table {{ relation }} add constraint {{ constraint_hash }} check {{ constraints_check }};
+        alter table {{ relation }} add constraint {{ constraint.name if constraint.name else constraint_hash }} check ({{ constraint.expression }});
       {% endcall %}
     {% endif %}
   {% endfor %}
@@ -210,22 +211,47 @@
   {% for column_name in column_dict %}
     {% set constraints = column_dict[column_name]['constraints'] %}
     {% for constraint in constraints %}
-      {% if constraint != 'not null' %}
-        {{ exceptions.warn('Invalid constraint for column ' ~ column_name ~ '. Only `not null` is supported.') }}
+      {% if constraint.type != 'not_null' %}
+        {{ exceptions.warn('Invalid constraint for column ' ~ column_name ~ '. Only `not_null` is supported.') }}
       {% else %}
         {% set quoted_name = adapter.quote(column_name) if column_dict[column_name]['quote'] else column_name %}
         {% call statement() %}
-          alter table {{ relation }} change column {{ quoted_name }} set {{ constraint }};
+          alter table {{ relation }} change column {{ quoted_name }} set not null {{ constraint.expression or "" }};
         {% endcall %}
       {% endif %}
     {% endfor %}
   {% endfor %}
 {% endmacro %}
 
+{% macro get_column_comment_sql(column_name, column_dict) -%}
+  {% if column_name in column_dict and column_dict[column_name]["description"] -%}
+    {% set escaped_description = column_dict[column_name]["description"] | replace("'", "\\'") %}
+    {% set column_comment_clause = "comment '" ~ escaped_description ~ "'" %}
+  {%- endif -%}
+  {{ adapter.quote(column_name) }} {{ column_comment_clause }}
+{% endmacro %}
+
+{% macro get_persist_docs_column_list(model_columns, query_columns) %}
+  {% for column_name in query_columns %}
+    {{ get_column_comment_sql(column_name, model_columns) }}
+    {{- ", " if not loop.last else "" }}
+  {% endfor %}
+{% endmacro %}
 
 {% macro spark__create_view_as(relation, sql) -%}
   create or replace view {{ relation }}
+  {% if config.persist_column_docs() -%}
+    {% set model_columns = model.columns %}
+    {% set query_columns = get_columns_in_query(sql) %}
+    (
+    {{ get_persist_docs_column_list(model_columns, query_columns) }}
+    )
+  {% endif %}
   {{ comment_clause() }}
+  {%- set contract_config = config.get('contract') -%}
+  {%- if contract_config.enforced -%}
+    {{ get_assert_columns_equivalent(sql) }}
+  {%- endif %}
   as
     {{ sql }}
 {% endmacro %}
