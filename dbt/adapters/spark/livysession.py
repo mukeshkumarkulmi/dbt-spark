@@ -27,7 +27,6 @@ import dbt.exceptions
 from dbt.events import AdapterLogger
 from dbt.utils import DECIMALS
 
-from requests_kerberos import HTTPKerberosAuth
 from datetime import datetime
 
 
@@ -366,7 +365,7 @@ class LivyConnection:
         self,
         connect_url: str,
         session_id: Optional[str],
-        auth: Optional[Tuple],
+        auth: Any,
         headers: Dict[str, Any],
         session_params: Dict[str, Any],
         verify_ssl_certificate: Optional[bool],
@@ -439,12 +438,8 @@ class LivyConnectionManager:
         session_params: Dict[str, Any],
         verify_ssl_certificate: Optional[bool],
     ) -> "LivyConnection":
-        if auth_type and auth_type.lower() == "kerberos":
-            logger.debug("Using Kerberos auth")
-            auth = HTTPKerberosAuth()
-        else:
-            logger.debug("Using HTTP auth")
-            auth = requests.auth.HTTPBasicAuth(user, password)
+        logger.debug("Using HTTP auth")
+        auth = requests.auth.HTTPBasicAuth(user, password)
 
         # the following opens an spark / sql session
         data = {"kind": "sql", "conf": session_params}  # 'spark'
@@ -479,8 +474,6 @@ class LivyConnectionManager:
 
 class LivySessionConnectionWrapper(object):
     """Connection wrapper for the livy sessoin connection method."""
-
-    handle: LivyConnection
 
     def __init__(self, handle: "LivyConnection") -> None:
         self.handle: LivyConnection = handle

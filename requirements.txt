@@ -1,7 +1,5 @@
 pyhive[hive_pure_sasl]~=0.7.0
 requests>=2.28.1
-requests_kerberos>=0.14
-libkrb5-dev
 
 pyodbc~=4.0.30
 sqlparams>=3.0.0
