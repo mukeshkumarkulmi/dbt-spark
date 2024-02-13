@@ -15,37 +15,43 @@
 """Spark Livy session integration."""
 
 from __future__ import annotations
-from cmath import log
 
 import json
 import time
 import requests
-from urllib import response
 
-import datetime as dt
 from types import TracebackType
-from typing import Any
+from typing import Any, Dict, Optional, Union, Tuple, List
 
 import dbt.exceptions
 from dbt.events import AdapterLogger
 from dbt.utils import DECIMALS
 
 from requests_kerberos import HTTPKerberosAuth
+from datetime import datetime
+
 
 logger = AdapterLogger("Spark")
 NUMBERS = DECIMALS + (int, float)
 
 DEFAULT_POLL_WAIT = 10
 
+
 class LivySession:
-    def __init__(self, connect_url, auth, headers, verify_ssl_certificate):
-        self.connect_url = connect_url
+    def __init__(
+        self,
+        connect_url: str,
+        auth: Any,
+        headers: Dict[str, Any],
+        verify_ssl_certificate: Optional[bool],
+    ) -> None:
+        self.connect_url: str = connect_url
         self.auth = auth
         self.headers = headers
-        self.session_id = None
+        self.session_id: Optional[str] = None
         self.verify_ssl_certificate = verify_ssl_certificate
 
-    def __enter__(self):
+    def __enter__(self) -> "LivySession":
         return self
 
     def __exit__(
@@ -57,15 +63,16 @@ class LivySession:
         self.delete_session()
         return True
 
-    def create_session(self, data):
+    def create_session(self, data: Dict[str, Any]) -> str:
         # Create sessions
         response = None
         try:
             response = requests.post(
-                       self.connect_url + '/sessions', data=json.dumps(data),
-                       headers=self.headers,
-                       auth=self.auth,
-                       verify=self.verify_ssl_certificate
+                self.connect_url + "/sessions",
+                data=json.dumps(data),
+                headers=self.headers,
+                auth=self.auth,
+                verify=self.verify_ssl_certificate,
             )
             response.raise_for_status()
         except requests.exceptions.ConnectionError as c_err:
@@ -82,26 +89,24 @@ class LivySession:
 
         self.session_id = None
         try:
-            self.session_id = str(response.json()['id'])
+            self.session_id = str(response.json()["id"])
         except requests.exceptions.JSONDecodeError as json_err:
             raise Exception("Json decode error to get session_id") from json_err
 
         # Wait for started state
         while True:
             res = requests.get(
-                self.connect_url + '/sessions/' + self.session_id + '/state',
+                self.connect_url + "/sessions/" + self.session_id + "/state",
                 headers=self.headers,
                 auth=self.auth,
-                verify=self.verify_ssl_certificate
+                verify=self.verify_ssl_certificate,
             ).json()
 
-            if res['state'] == 'idle':
+            if res["state"] == "idle":
                 break
-            if res['state'] == 'dead':
+            if res["state"] == "dead":
                 print("ERROR, cannot create a livy interactive session")
-                raise dbt.exceptions.FailedToConnectException(
-                        'failed to connect'
-                    )
+                raise dbt.exceptions.FailedToConnectError("failed to connect")
                 return
 
             time.sleep(DEFAULT_POLL_WAIT)
@@ -110,32 +115,32 @@ class LivySession:
 
         return self.session_id
 
-    def delete_session(self):
+    def delete_session(self) -> None:
         logger.debug(f"Closing the livy session: {self.session_id}")
 
         try:
             # delete the session_id
             _ = requests.delete(
-                self.connect_url + '/sessions/' + self.session_id,
+                f"{self.connect_url}/sessions/{self.session_id}",
                 headers=self.headers,
                 auth=self.auth,
-                verify=self.verify_ssl_certificate
+                verify=self.verify_ssl_certificate,
             )
         except Exception as ex:
             logger.error(f"Unable to close the livy session {self.session_id}, error: {ex}")
 
-    def is_valid_session(self):
+    def is_valid_session(self) -> bool:
         res = requests.get(
-                self.connect_url + '/sessions/' + self.session_id + '/state',
-                headers=self.headers,
-                auth=self.auth,
-                verify=self.verify_ssl_certificate
-            ).json()
+            f"{self.connect_url}/sessions/{self.session_id}/state",
+            headers=self.headers,
+            auth=self.auth,
+            verify=self.verify_ssl_certificate,
+        ).json()
 
-        if res['state'] in ['not_started', 'starting']:
+        if res["state"] in ["not_started", "starting"]:
             time.sleep(2 * DEFAULT_POLL_WAIT)
 
-        return (res['state'] in ['not_started', 'starting', 'idle', 'busy'])
+        return res["state"] in ["not_started", "starting", "idle", "busy"]
 
 
 # cursor object - wrapped for livy API
@@ -148,16 +153,16 @@ class LivyCursor:
     https://github.com/mkleehammer/pyodbc/wiki/Cursor
     """
 
-    def __init__(self) -> None:
-        self._schema = None
-        self._rows = None
-        self.session_id = -1
-        self.auth = None
-        self.headers = None
-
-    def __init__(self, connect_url, session_id, auth, headers, verify_ssl_certificate) -> None:
-        self._rows = None
-        self._schema = None
+    def __init__(
+        self,
+        connect_url: str,
+        session_id: Optional[str],
+        auth: Any,
+        headers: Dict[str, Any],
+        verify_ssl_certificate: Optional[bool],
+    ) -> None:
+        self._rows: Optional[List[Any]] = None
+        self._schema: Any = None
         self.connect_url = connect_url
         self.session_id = session_id
         self.auth = auth
@@ -179,7 +184,7 @@ class LivyCursor:
     @property
     def description(
         self,
-    ) -> list[tuple[str, str, None, None, None, None, bool]]:
+    ) -> List[Tuple[str, str, None, None, None, None, bool]]:
         """
         Get the description.
 
@@ -193,17 +198,17 @@ class LivyCursor:
         https://github.com/mkleehammer/pyodbc/wiki/Cursor#description
         """
         if self._schema is None:
-            description = list()
+            description: List[Tuple[str, str, None, None, None, None, bool]] = list()
         else:
             description = [
                 (
-                    field['name'],
-                    field['type'], # field['dataType'],
+                    field["name"],
+                    field["type"],  # field['dataType'],
                     None,
                     None,
                     None,
                     None,
-                    field['nullable'],
+                    field["nullable"],
                 )
                 for field in self._schema
             ]
@@ -219,21 +224,21 @@ class LivyCursor:
         """
         self._rows = None
 
-    def _submitLivyCode(self, code):
+    def _submitLivyCode(self, code: str) -> "requests.models.Response":
         # Submit code
-        data = {'code': code}
+        data = {"code": code}
 
-        res = requests.post(self.connect_url + '/sessions/' + self.session_id + '/statements',
-              data=json.dumps(data),
-              headers=self.headers,
-              auth=self.auth,
-              verify=self.verify_ssl_certificate
+        res = requests.post(
+            f"{self.connect_url}/sessions/{self.session_id}/statements",
+            data=json.dumps(data),
+            headers=self.headers,
+            auth=self.auth,
+            verify=self.verify_ssl_certificate,
         )
 
         return res
 
-
-    def _getLivySQL(self, sql):
+    def _getLivySQL(self, sql: str) -> str:
         # Comment, what is going on?!
         # The following code is actually injecting SQL to pyspark object for executing it via the Livy session - over an HTTP post request.
         # Basically, it is like code inside a code. As a result the strings passed here in 'escapedSQL' variable are unescapted and interpreted on the server side.
@@ -248,20 +253,20 @@ class LivyCursor:
 
         return code
 
-    def _getLivyResult(self, res_obj):
+    def _getLivyResult(self, res_obj: "requests.models.Response") -> Dict[Any, Any]:
         json_res = res_obj.json()
 
         while True:
             res = requests.get(
-                  self.connect_url + '/sessions/' + self.session_id + '/statements/' + repr(json_res['id']),
-                  headers=self.headers,
-                  auth=self.auth,
-                  verify=self.verify_ssl_certificate
+                f"{self.connect_url}/sessions/{self.session_id}/statements/{repr(json_res['id'])}",
+                headers=self.headers,
+                auth=self.auth,
+                verify=self.verify_ssl_certificate,
             ).json()
 
             # print(res)
 
-            if res['state'] == 'available':
+            if res["state"] == "available":
                 return res
             time.sleep(DEFAULT_POLL_WAIT)
 
@@ -292,12 +297,12 @@ class LivyCursor:
 
         res = self._getLivyResult(self._submitLivyCode(self._getLivySQL(sql)))
 
-        if (res['output']['status'] == 'ok'):
+        if res["output"]["status"] == "ok":
             # values = res['output']['data']['application/json']
-            values = res['output']['data']['application/json']
-            if (len(values) >= 1):
-                self._rows = values['data'] # values[0]['values']
-                self._schema = values['schema']['fields'] # values[0]['schema']
+            values = res["output"]["data"]["application/json"]
+            if len(values) >= 1:
+                self._rows = values["data"]  # values[0]['values']
+                self._schema = values["schema"]["fields"]  # values[0]['schema']
                 # print("rows", self._rows)
                 # print("schema", self._schema)
             else:
@@ -307,11 +312,11 @@ class LivyCursor:
             self._rows = None
             self._schema = None
 
-            raise dbt.exceptions.raise_database_error(
-                        'Error while executing query: ' + res['output']['evalue']
-                    )
+            raise dbt.exceptions.DbtRuntimeError(
+                "Error while executing query: " + res["output"]["evalue"]
+            )
 
-    def fetchall(self):
+    def fetchall(self) -> Optional[List[Tuple]]:
         """
         Fetch all data.
 
@@ -326,7 +331,7 @@ class LivyCursor:
         """
         return self._rows
 
-    def fetchone(self):
+    def fetchone(self) -> Optional[Tuple]:
         """
         Fetch the first output.
 
@@ -347,6 +352,7 @@ class LivyCursor:
 
         return row
 
+
 class LivyConnection:
     """
     Mock a pyodbc connection.
@@ -356,29 +362,39 @@ class LivyConnection:
     https://github.com/mkleehammer/pyodbc/wiki/Connection
     """
 
-    def __init__(self, connect_url, session_id, auth, headers, session_params, verify_ssl_certificate) -> None:
-        self.connect_url = connect_url
-        self.session_id = session_id
-        self.auth = auth
-        self.headers = headers
-        self.session_params = session_params
-        self.verify_ssl_certificate = verify_ssl_certificate
+    def __init__(
+        self,
+        connect_url: str,
+        session_id: Optional[str],
+        auth: Optional[Tuple],
+        headers: Dict[str, Any],
+        session_params: Dict[str, Any],
+        verify_ssl_certificate: Optional[bool],
+    ) -> None:
+        self.connect_url: str = connect_url
+        self.session_id: Optional[str] = session_id
+        self.auth: Optional[Tuple] = auth
+        self.headers: Dict[str, Any] = headers
+        self.session_params: Dict[str, Any] = session_params
+        self.verify_ssl_certificate: Optional[bool] = verify_ssl_certificate
 
-        self._cursor = LivyCursor(self.connect_url, self.session_id, self.auth, self.headers, self.verify_ssl_certificate)
+        self._cursor: "LivyCursor" = LivyCursor(
+            self.connect_url, self.session_id, self.auth, self.headers, self.verify_ssl_certificate
+        )
 
-    def get_session_id(self):
+    def get_session_id(self) -> Optional[str]:
         return self.session_id
 
-    def get_auth(self):
+    def get_auth(self) -> Optional[Tuple]:
         return self.auth
 
-    def get_headers(self):
+    def get_headers(self) -> Dict[str, str]:
         return self.headers
 
-    def get_connect_url(self):
+    def get_connect_url(self) -> str:
         return self.connect_url
 
-    def cursor(self):
+    def cursor(self) -> "LivyCursor":
         """
         Get a cursor.
 
@@ -409,12 +425,20 @@ class LivyConnection:
         self.close()
         return True
 
+
 class LivyConnectionManager:
+    def __init__(self) -> None:
+        self.livy_global_session: Optional[LivySession] = None
 
-    def __init__(self):
-        self.livy_global_session = None
-
-    def connect(self, connect_url, user, password, auth_type, session_params, verify_ssl_certificate):
+    def connect(
+        self,
+        connect_url: str,
+        user: Any,
+        password: Any,
+        auth_type: Optional[str],
+        session_params: Dict[str, Any],
+        verify_ssl_certificate: Optional[bool],
+    ) -> "LivyConnection":
         if auth_type and auth_type.lower() == "kerberos":
             logger.debug("Using Kerberos auth")
             auth = HTTPKerberosAuth()
@@ -423,80 +447,89 @@ class LivyConnectionManager:
             auth = requests.auth.HTTPBasicAuth(user, password)
 
         # the following opens an spark / sql session
-        data = {
-            'kind': 'sql', # 'spark'
-            'conf': session_params
-        }
+        data = {"kind": "sql", "conf": session_params}  # 'spark'
 
-        headers = {
-            'Content-Type': 'application/json'
-        }
+        headers = {"Content-Type": "application/json"}
 
-        if (self.livy_global_session == None):
-            self.livy_global_session = LivySession(connect_url, auth, headers, verify_ssl_certificate)
+        if self.livy_global_session is None:
+            self.livy_global_session = LivySession(
+                connect_url, auth, headers, verify_ssl_certificate
+            )
             self.livy_global_session.create_session(data)
-        elif not self.livy_global_session.is_valid_session():
+        elif self.livy_global_session.is_valid_session() is False:
             self.livy_global_session.create_session(data)
         else:
             logger.debug(f"Reusing session: {self.livy_global_session.session_id}")
 
         livyConnection = LivyConnection(
-                            connect_url,
-                            self.livy_global_session.session_id,
-                            auth,
-                            headers,
-                            session_params,
-                            verify_ssl_certificate
-                        )
+            connect_url,
+            self.livy_global_session.session_id,
+            auth,
+            headers,
+            session_params,
+            verify_ssl_certificate,
+        )
 
         return livyConnection
+
+    def delete_session(self) -> None:
+        if self.livy_global_session is not None:
+            self.livy_global_session.delete_session()
+
 
 class LivySessionConnectionWrapper(object):
     """Connection wrapper for the livy sessoin connection method."""
 
-    def __init__(self, handle):
-        self.handle = handle
-        self._cursor = None
+    handle: LivyConnection
 
-    def cursor(self):
+    def __init__(self, handle: "LivyConnection") -> None:
+        self.handle: LivyConnection = handle
+        self._cursor: Optional[LivyCursor] = None
+
+    def cursor(self) -> "LivySessionConnectionWrapper":
         self._cursor = self.handle.cursor()
         return self
 
-    def cancel(self):
+    def cancel(self) -> None:
         logger.debug("NotImplemented: cancel")
 
-    def close(self):
+    def close(self) -> None:
         self.handle.close()
 
-    def rollback(self, *args, **kwargs):
+    def rollback(self, *args: Any, **kwargs: Any) -> None:
         logger.debug("NotImplemented: rollback")
 
-    def fetchall(self):
-        return self._cursor.fetchall()
+    def fetchall(self) -> Optional[List[Tuple]]:
+        if self._cursor is not None:
+            return self._cursor.fetchall()
+        else:
+            return None
 
-    def execute(self, sql, bindings=None):
+    def execute(self, sql: str, bindings: Optional[List[Any]] = None) -> None:
         if sql.strip().endswith(";"):
             sql = sql.strip()[:-1]
 
-        if bindings is None:
-            self._cursor.execute(sql)
-        else:
-            bindings = [self._fix_binding(binding) for binding in bindings]
-            self._cursor.execute(sql, *bindings)
+        if self._cursor is not None:
+            if bindings is None:
+                self._cursor.execute(sql)
+            else:
+                bindings = [self._fix_binding(binding) for binding in bindings]
+                self._cursor.execute(sql, *bindings)
 
     @property
-    def description(self):
-        return self._cursor.description
+    def description(self) -> Optional[List[Tuple[str, str, None, None, None, None, bool]]]:
+        if self._cursor is not None:
+            return self._cursor.description
+        else:
+            return None
 
     @classmethod
-    def _fix_binding(cls, value):
+    def _fix_binding(cls, value: Any) -> Union[float, str]:
         """Convert complex datatypes to primitives that can be loaded by
         the Spark driver"""
         if isinstance(value, NUMBERS):
             return float(value)
-        elif isinstance(value, dt.datetime):
-            return f"'{value.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}'"
-        elif value == None:
-            return "''"
+        elif isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         else:
-            return f"'{value}'"
+            return value

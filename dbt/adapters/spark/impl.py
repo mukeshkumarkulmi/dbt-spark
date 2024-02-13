@@ -496,10 +496,11 @@ class SparkAdapter(SQLAdapter):
 
         # close all sessions
         for conn_mgr in SparkConnectionManager.connection_managers:
-            SparkConnectionManager.connection_managers[conn_mgr].livy_global_session.delete_session()
+            SparkConnectionManager.connection_managers[conn_mgr].delete_session()
 
         # reset connection_manager list
         SparkConnectionManager.connection_managers = {}
+
 
 # spark does something interesting with joins when both tables have the same
 # static values for the join condition and complains that the join condition is
