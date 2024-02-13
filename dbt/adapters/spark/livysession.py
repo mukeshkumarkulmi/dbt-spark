@@ -372,7 +372,7 @@ class LivyConnection:
     ) -> None:
         self.connect_url: str = connect_url
         self.session_id: Optional[str] = session_id
-        self.auth: Optional[Tuple] = auth
+        self.auth: Any = auth
         self.headers: Dict[str, Any] = headers
         self.session_params: Dict[str, Any] = session_params
         self.verify_ssl_certificate: Optional[bool] = verify_ssl_certificate
@@ -384,7 +384,7 @@ class LivyConnection:
     def get_session_id(self) -> Optional[str]:
         return self.session_id
 
-    def get_auth(self) -> Optional[Tuple]:
+    def get_auth(self) -> Any:
         return self.auth
 
     def get_headers(self) -> Dict[str, str]:
