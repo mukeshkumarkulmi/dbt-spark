@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from threading import Lock
 
 import dbt.exceptions
 from dbt.adapters.base import Credentials
@@ -7,6 +8,7 @@ from dbt.contracts.connection import ConnectionState, AdapterResponse
 from dbt.events import AdapterLogger
 from dbt.utils import DECIMALS
 from dbt.adapters.spark import __version__
+from dbt.adapters.spark.livysession import LivyConnectionManager, LivySessionConnectionWrapper
 
 try:
     from TCLIService.ttypes import TOperationState as ThriftState
@@ -25,7 +27,7 @@ import sqlparams
 from dbt.contracts.connection import Connection
 from dbt.dataclass_schema import StrEnum
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Union, Tuple, List, Generator, Iterable, Sequence
+from typing import Any, Dict, Optional, Union, Tuple, List, Generator, Iterable, Sequence, Hashable
 
 from abc import ABC, abstractmethod
 
@@ -42,7 +44,7 @@ import base64
 import time
 
 logger = AdapterLogger("Spark")
-
+lock = Lock()
 NUMBERS = DECIMALS + (int, float)
 
 
@@ -55,6 +57,7 @@ class SparkConnectionMethod(StrEnum):
     HTTP = "http"
     ODBC = "odbc"
     SESSION = "session"
+    LIVY = "livy"
 
 
 @dataclass
@@ -78,6 +81,8 @@ class SparkCredentials(Credentials):
     use_ssl: bool = False
     server_side_parameters: Dict[str, str] = field(default_factory=dict)
     retry_all: bool = False
+    livy_session_parameters: Dict[str, Any] = field(default_factory=dict)
+    verify_ssl_certificate: Optional[bool] = True
 
     @classmethod
     def __pre_deserialize__(cls, data: Any) -> Any:
@@ -343,6 +348,7 @@ class SparkConnectionManager(SQLConnectionManager):
     SPARK_CLUSTER_HTTP_PATH = "/sql/protocolv1/o/{organization}/{cluster}"
     SPARK_SQL_ENDPOINT_HTTP_PATH = "/sql/1.0/endpoints/{endpoint}"
     SPARK_CONNECTION_URL = "{host}:{port}" + SPARK_CLUSTER_HTTP_PATH
+    connection_managers: Dict[Hashable, LivyConnectionManager] = {}
 
     @contextmanager
     def exception_handler(self, sql: str) -> Generator[None, None, None]:
@@ -515,6 +521,46 @@ class SparkConnectionManager(SQLConnectionManager):
 
                     conn = pyodbc.connect(connection_str, autocommit=True)
                     handle = PyodbcConnectionWrapper(conn)
+
+                elif creds.method == SparkConnectionMethod.LIVY:
+                    # connect to livy interactive session
+
+                    lock.acquire()
+                    try:
+                        thread_id = cls.get_thread_identifier()
+
+                        if thread_id not in SparkConnectionManager.connection_managers:
+                            if len(SparkConnectionManager.connection_managers) > 0:
+                                # Return same livy session
+                                livyConnMgr = list(
+                                    SparkConnectionManager.connection_managers.values()
+                                )[0]
+                                SparkConnectionManager.connection_managers[thread_id] = livyConnMgr
+                            else:
+                                SparkConnectionManager.connection_managers[
+                                    thread_id
+                                ] = LivyConnectionManager()
+
+                        handle = LivySessionConnectionWrapper(  # type: ignore
+                            SparkConnectionManager.connection_managers[thread_id].connect(
+                                creds.host,
+                                creds.user,
+                                creds.password,
+                                creds.auth,
+                                creds.livy_session_parameters,
+                                creds.verify_ssl_certificate,
+                            )
+                        )
+                        connection.state = ConnectionState.OPEN
+
+                    except Exception as ex:
+                        logger.debug("Connection error: {}".format(ex))
+                        connection.state = ConnectionState.FAIL
+                        raise ex
+
+                    finally:
+                        lock.release()
+
                 elif creds.method == SparkConnectionMethod.SESSION:
                     from .session import (  # noqa: F401
                         Connection,
@@ -524,6 +570,7 @@ class SparkConnectionManager(SQLConnectionManager):
                     handle = SessionConnectionWrapper(
                         Connection(server_side_parameters=creds.server_side_parameters)
                     )
+
                 else:
                     raise dbt.exceptions.DbtProfileError(
                         f"invalid credential method: {creds.method}"
