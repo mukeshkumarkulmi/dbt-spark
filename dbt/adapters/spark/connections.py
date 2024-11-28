@@ -567,8 +567,8 @@ class SparkConnectionManager(SQLConnectionManager):
                         SessionConnectionWrapper,
                     )
 
-                    handle = SessionConnectionWrapper(  # type: ignore
-                        Connection(server_side_parameters=creds.server_side_parameters)  # type: ignore
+                    handle = SessionConnectionWrapper(
+                        Connection(server_side_parameters=creds.server_side_parameters)
                     )
 
                 else:
